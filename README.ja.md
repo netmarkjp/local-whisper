@@ -74,6 +74,28 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
 - **音声が取得できない**: macOS の「システム設定 > プライバシーとセキュリティ > マイク」でアプリの権限を許可してください。
 - **パフォーマンスが出ない**: 一時的に別モデルへ切り替え、または他の重いアプリを終了して CPU/GPU 負荷を下げてください。
 
+## メンテナンス（依存の更新）
+
+方針: ランタイム・ライブラリ・Actions は、公開から **3 日以上** 経過した最新安定版のみを採用します（サプライチェーン対策の cooldown）。
+
+| 対象 | cooldown / 固定の設定箇所 |
+| --- | --- |
+| Rust / Node.js / pnpm | `mise.toml`（`minimum_release_age = "3d"`、バージョンは完全固定）と `mise.lock`（macos-arm64 / linux-x64 のチェックサム） |
+| Cargo クレート | `.cargo/config.toml`（`registry.global-min-publish-age = "3 days"`、Cargo 1.100 以上が必要）と `Cargo.lock` |
+| npm パッケージ | `apps/desktop/pnpm-workspace.yaml`（`minimumReleaseAge: 4320`、単位は分）と `pnpm-lock.yaml` |
+| GitHub Actions | `.github/workflows/actions.lock`（[`github/gh-actions-lock`](https://github.com/github/gh-actions-lock) **v0.4.1** で生成） |
+| Dependabot | `.github/dependabot.yml`（cargo / npm / github-actions に `cooldown.default-days: 3`） |
+
+Actions のロックファイル更新（workflow を追加したときや `uses:` を変更したときに実行）:
+
+```bash
+gh extension install github/gh-actions-lock --pin v0.4.1   # 初回のみ
+gh actions-lock                                            # actions.lock の onboard / 修復
+gh actions-lock --verify                                   # 読み取り専用の検証（CI でも実行）
+```
+
+`mise.lock` の更新（`mise.toml` を編集した後）: `mise lock` を実行し、`mise lock --check` で確認します。Dependabot は `mise.toml` を扱わないため、ツールのバージョンは手動で更新してください。
+
 ## 謝辞
 
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp)

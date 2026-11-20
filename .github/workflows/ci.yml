@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-actions-lock:
+    name: Verify actions.lock
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # Keep the version in sync with README "Maintenance" and with the tool used to generate actions.lock.
+      - name: Install gh-actions-lock
+        run: gh extension install github/gh-actions-lock --pin v0.4.1
+
+      - name: Verify lockfile
+        run: gh actions-lock --verify
+
+  build-test:
+    name: Build and test (macOS)
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup toolchain (mise)
+        uses: jdx/mise-action@v5.2.9
+        with:
+          # Same pinned mise binary as release-tauri.yml. The action adds `--locked` itself
+          # because mise.lock exists.
+          version: 2026.11.9
+          sha256: f3bb0e8cbe0217a0b52444ecc0042364563ddd1de0490313bb7e702ecab41a14
+          # No secrets in this workflow, so the Actions cache is acceptable here. The release
+          # workflow uses `cache: false` and never restores caches written by CI.
+          cache: true
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: pnpm build
+
+      # `cargo fmt --check` is intentionally omitted: the existing code is not yet formatted
+      # and the check would fail. Add it after a one-off `cargo fmt --all` commit.
+      # `-D warnings` is omitted for clippy because of pre-existing warnings.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
+
+      - name: Test
+        run: cargo test --workspace --locked

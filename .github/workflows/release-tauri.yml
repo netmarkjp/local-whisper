@@ -8,6 +8,9 @@ on:
 
 jobs:
   release:
+    # Only release from version tags; a workflow_dispatch on a branch would otherwise
+    # publish a signed release tagged with the branch name.
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     strategy:

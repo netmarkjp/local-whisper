@@ -2,6 +2,10 @@
 # Only adopt tool versions released at least 3 days ago (supply-chain cooldown).
 # Applies when resolving ranges/"latest"; the exact pins below were chosen to satisfy it.
 minimum_release_age = "3d"
+# Write mise.lock (checksums/URLs). jdx/mise-action runs `mise install --locked` when it exists.
+lockfile = true
+# Platforms recorded in mise.lock: macOS arm64 (dev + CI macos-15) and linux x64 (dev container).
+lockfile_platforms = ["macos-arm64", "linux-x64"]
 
 [tools]
 # Rust >= 1.100 is required for Cargo's cooldown feature. Released 2026-11-12.

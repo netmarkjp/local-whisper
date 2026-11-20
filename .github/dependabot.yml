@@ -1,0 +1,72 @@
+# Dependabot version updates.
+# Ref: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+#
+# Cooldown (project policy: only adopt releases that are >= 3 days old) is applied to every
+# ecosystem. Security updates are NOT subject to cooldown.
+# Not covered: mise.toml (rust/node/pnpm pins). Dependabot has no official "mise" ecosystem yet
+# (dependabot-core PR #14500 is still open); bump those by hand, see "Maintenance" in the README.
+version: 2
+
+updates:
+  # Rust workspace (Cargo.toml / Cargo.lock at the repository root).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      tauri:
+        patterns:
+          - "tauri"
+          - "tauri-*"
+      rust-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Frontend (pnpm; Dependabot detects apps/desktop/pnpm-lock.yaml under the npm ecosystem).
+  - package-ecosystem: npm
+    directory: "/apps/desktop"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      tauri-js:
+        patterns:
+          - "@tauri-apps/*"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+          - "@vitejs/plugin-react"
+      tailwind:
+        patterns:
+          - "tailwindcss"
+          - "@tailwindcss/*"
+          - "daisyui"
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions. For workflows onboarded in .github/workflows/actions.lock, Dependabot
+  # regenerates the matching lockfile entry in the same pull request (GitHub changelog 2026-10-28).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
