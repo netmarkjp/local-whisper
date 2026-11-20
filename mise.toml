@@ -1,0 +1,12 @@
+[settings]
+# Only adopt tool versions released at least 3 days ago (supply-chain cooldown).
+# Applies when resolving ranges/"latest"; the exact pins below were chosen to satisfy it.
+minimum_release_age = "3d"
+
+[tools]
+# Rust >= 1.100 is required for Cargo's cooldown feature. Released 2026-11-12.
+rust = { version = "1.100.0", components = "clippy,rustfmt" }
+# Node.js 26 (LTS "Lithium"). v26.13.1 released 2026-11-10.
+node = "26.13.1"
+# pnpm 12.21.0 released 2026-11-13.
+pnpm = "12.21.0"

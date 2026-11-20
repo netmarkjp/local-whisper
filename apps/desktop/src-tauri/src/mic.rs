@@ -56,11 +56,9 @@ pub async fn start_mic_stream(app_handle: AppHandle, language: Option<String>) -
         host.input_devices()
             .map_err(|e| format!("Failed to enumerate devices: {}", e))?
             .find(|d| {
-                if let Ok(name) = d.name() {
-                    name == *device_name
-                } else {
-                    false
-                }
+                d.description()
+                    .map(|desc| desc.name() == device_name.as_str())
+                    .unwrap_or(false)
             })
             .ok_or_else(|| format!("Selected device '{}' not found", device_name))?
     } else {
@@ -68,7 +66,8 @@ pub async fn start_mic_stream(app_handle: AppHandle, language: Option<String>) -
             .ok_or("No input device available")?
     };
     let device_name = device
-        .name()
+        .description()
+        .map(|desc| desc.name().to_string())
         .unwrap_or_else(|_| "Unknown device".to_string());
     info!(
         "Using input device: {}{}",
@@ -82,7 +81,7 @@ pub async fn start_mic_stream(app_handle: AppHandle, language: Option<String>) -
         .default_input_config()
         .map_err(|e| format!("Failed to get default input config: {}", e))?;
 
-    let device_sample_rate = config.sample_rate().0;
+    let device_sample_rate = config.sample_rate();
     let channels = config.channels() as usize;
 
     info!(
@@ -131,7 +130,7 @@ pub async fn start_mic_stream(app_handle: AppHandle, language: Option<String>) -
 
             let app_handle_clone = app_handle.clone();
             device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mut api_payload: Option<(Vec<f32>, String, u64)> = None;
                     let mut state = state_clone.lock();

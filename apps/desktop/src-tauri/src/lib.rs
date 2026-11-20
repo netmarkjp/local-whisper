@@ -371,13 +371,16 @@ pub(crate) fn handle_api_stream_failure(app_handle: &AppHandle, source: &str, er
 
 pub(crate) async fn list_audio_devices_impl() -> Result<Vec<AudioDevice>, String> {
     let host = cpal::default_host();
-    let default_device_name = host.default_input_device().and_then(|d| d.name().ok());
+    let default_device_name = host
+        .default_input_device()
+        .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
 
     let devices: Vec<AudioDevice> = host
         .input_devices()
         .map_err(|e| format!("Failed to enumerate devices: {}", e))?
         .filter_map(|device| {
-            device.name().ok().map(|name| {
+            device.description().ok().map(|desc| {
+                let name = desc.name().to_string();
                 let is_default = default_device_name.as_ref() == Some(&name);
                 AudioDevice { name, is_default }
             })

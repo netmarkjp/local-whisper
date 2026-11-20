@@ -25,11 +25,10 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
 
 ## Requirements
 
-- Apple Silicon Mac (macOS 13+ recommended)
-- Rust 1.70 or later
-- Node.js 18 or later
-- pnpm
-- A C++ compiler (for building whisper.cpp)
+- Apple Silicon Mac (macOS 13.3+ recommended; the UI uses Tailwind CSS v4, which requires Safari 16.4+ / WKWebView)
+- [mise](https://mise.jdx.dev/) (installs the pinned Rust, Node.js and pnpm from `mise.toml`)
+- Xcode Command Line Tools (`xcode-select --install`): provides `swiftc` / `xcrun` for the Swift bridge, and clang / libclang for building `whisper-rs-sys`
+- [CMake](https://cmake.org/) (for building whisper.cpp via `whisper-rs-sys`, e.g. `brew install cmake`)
 
 ## Setup
 
@@ -38,12 +37,16 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
    ```bash
    git clone <repository-url>
    cd local-whisper
+   # Optional: whisper-rs-sys bundles whisper.cpp, so this is not required to build.
+   # It only provides the Metal resources under vendor/whisper.cpp referenced by crates/asr-core/build.rs.
    git submodule update --init --recursive
    ```
 
 2. **Install dependencies**
 
    ```bash
+   mise trust && mise install   # Rust / Node.js / pnpm
+   eval "$(mise activate zsh)"  # or `bash`; activates the mise-managed tools in this shell
    cd apps/desktop
    pnpm install
    ```
@@ -52,6 +55,7 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
    ```bash
    pnpm tauri dev
    ```
+   If you did not activate mise, prefix commands with `mise exec --`, e.g. `mise exec -- pnpm install` and `mise exec -- pnpm tauri dev`.
    Need a packaged build? Run `pnpm tauri build`.
 
 ## Model selection tips

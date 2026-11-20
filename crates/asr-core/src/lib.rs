@@ -3,16 +3,19 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use thiserror::Error;
 use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext as WhisperRsContext, WhisperContextParameters,
+    FullParams, GGMLLogLevel, SamplingStrategy, WhisperContext as WhisperRsContext,
+    WhisperContextParameters,
 };
 
 const WHISPER_SAMPLE_RATE: usize = 16_000;
 const MIN_AUDIO_DURATION_S: usize = 2;
 const MIN_AUDIO_SAMPLES: usize = WHISPER_SAMPLE_RATE * MIN_AUDIO_DURATION_S;
 static WHISPER_LOG_INIT: Once = Once::new();
+static LAST_LOG_EMITTED: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "C" fn whisper_log_filter_callback(
     level: u32,
@@ -27,12 +30,21 @@ unsafe extern "C" fn whisper_log_filter_callback(
 
     // Suppress verbose decoder traces such as:
     // "whisper_full_with_state: id = ..."
-    if msg.contains("whisper_full_with_state") {
-        return;
-    }
+    let suppressed = msg.contains("whisper_full_with_state");
 
     // Keep only warning/error messages from whisper.cpp.
-    if level <= 3 {
+    // ggml_log_level (whisper-rs-sys 0.15): NONE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4, CONT=5.
+    // CONT continues the previous message, so it inherits that message's verdict
+    // (including suppression of trace lines).
+    let emit = match GGMLLogLevel::from(level) {
+        GGMLLogLevel::Cont => !suppressed && LAST_LOG_EMITTED.load(Ordering::Relaxed),
+        other => {
+            let keep = !suppressed && matches!(other, GGMLLogLevel::Warn | GGMLLogLevel::Error);
+            LAST_LOG_EMITTED.store(keep, Ordering::Relaxed);
+            keep
+        }
+    };
+    if emit {
         eprint!("{msg}");
     }
 }
@@ -161,26 +173,22 @@ impl WhisperContext {
             .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
         let _inference_elapsed = inference_start.elapsed();
 
-        let num_segments = state
-            .full_n_segments()
-            .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
+        let num_segments = state.full_n_segments();
 
-        let mut segments = Vec::with_capacity(num_segments as usize);
+        let mut segments = Vec::with_capacity(num_segments.max(0) as usize);
         for i in 0..num_segments {
-            let text = state
-                .full_get_segment_text_lossy(i)
-                .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-            let start_cs = state
-                .full_get_segment_t0(i)
-                .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-            let end_cs = state
-                .full_get_segment_t1(i)
-                .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-            let words = collect_words(&state, i)?;
+            let segment = state.get_segment(i).ok_or_else(|| {
+                WhisperError::ProcessingFailed(format!("segment {i} out of bounds"))
+            })?;
+            let text = segment
+                .to_str_lossy()
+                .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?
+                .into_owned();
+            let words = collect_words(&segment)?;
             segments.push(TranscribedSegment {
                 text,
-                start_ms: start_cs * 10,
-                end_ms: end_cs * 10,
+                start_ms: segment.start_timestamp() * 10,
+                end_ms: segment.end_timestamp() * 10,
                 words,
             });
         }
@@ -203,21 +211,19 @@ impl WhisperContext {
 }
 
 fn collect_words(
-    state: &whisper_rs::WhisperState,
-    segment_index: i32,
+    segment: &whisper_rs::WhisperSegment<'_>,
 ) -> Result<Vec<TranscribedWord>, WhisperError> {
-    let token_count = state
-        .full_n_tokens(segment_index)
-        .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
+    let token_count = segment.n_tokens();
 
-    let mut words = Vec::with_capacity(token_count as usize);
+    let mut words = Vec::with_capacity(token_count.max(0) as usize);
     for token_idx in 0..token_count {
-        let token_text = state
-            .full_get_token_text_lossy(segment_index, token_idx)
+        let Some(token) = segment.get_token(token_idx) else {
+            continue;
+        };
+        let token_text = token
+            .to_str_lossy()
             .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-        let token_data = state
-            .full_get_token_data(segment_index, token_idx)
-            .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
+        let token_data = token.token_data();
 
         if token_data.t0 < 0 || token_data.t1 <= token_data.t0 {
             continue;

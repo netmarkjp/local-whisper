@@ -20,11 +20,10 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
 
 ## 必要環境
 
-- Apple Silicon 搭載 Mac（macOS 13 以上推奨）
-- Rust 1.70+
-- Node.js 18+
-- pnpm
-- C++ コンパイラ（whisper.cpp のビルド用）
+- Apple Silicon 搭載 Mac（macOS 13.3 以上推奨。UI の Tailwind CSS v4 が Safari 16.4 以上 / WKWebView を必要とするため）
+- [mise](https://mise.jdx.dev/)（`mise.toml` に固定された Rust / Node.js / pnpm をインストールします）
+- Xcode Command Line Tools（`xcode-select --install`）: Swift ブリッジ用の `swiftc` / `xcrun`、および `whisper-rs-sys` のビルドに必要な clang / libclang を含みます
+- [CMake](https://cmake.org/)（`whisper-rs-sys` 経由の whisper.cpp ビルド用。例: `brew install cmake`）
 
 ## セットアップ
 
@@ -33,12 +32,16 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
    ```bash
    git clone <repository-url>
    cd local-whisper
+   # 任意: whisper-rs-sys が whisper.cpp を同梱するためビルドには不要です。
+   # crates/asr-core/build.rs が参照する vendor/whisper.cpp 配下の Metal リソースを取得したい場合のみ実行します。
    git submodule update --init --recursive
    ```
 
 2. **依存関係をインストール**
 
    ```bash
+   mise trust && mise install   # Rust / Node.js / pnpm
+   eval "$(mise activate zsh)"  # bash の場合は `bash`。このシェルで mise 管理のツールを有効化します
    cd apps/desktop
    pnpm install
    ```
@@ -47,6 +50,7 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
    ```bash
    pnpm tauri dev
    ```
+   mise を activate しない場合は、コマンドの前に `mise exec --` を付けてください（例: `mise exec -- pnpm install`、`mise exec -- pnpm tauri dev`）。
    ビルド済みバイナリが欲しい場合は `pnpm tauri build` を利用してください。
 
 ## モデル選択のヒント

@@ -1398,7 +1398,7 @@ function App() {
           <select
             value={selectedLanguage}
             onChange={(e) => handleLanguageChange(e.target.value)}
-            className="select select-bordered select-xs w-24 font-normal"
+            className="select select-xs w-24 font-normal"
           >
             {availableLanguages.length === 0 ? (
               <option value="ja">日本語</option>
@@ -1765,14 +1765,14 @@ function App() {
                   モデル設定
                 </summary>
                 <div className="collapse-content space-y-4">
-                  <div className="form-control">
-                    <label className="label">
-                      <span className="label-text">使用モデル</span>
+                  <div className="flex flex-col gap-1">
+                    <label className="label py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">使用モデル</span>
                     </label>
                     <select
                       value={selectedModel}
                       onChange={(e) => setSelectedModel(e.target.value)}
-                      className="select select-bordered w-full"
+                      className="select w-full"
                     >
                       {availableModels.map((model) => (
                         <option key={model.path} value={model.path}>
@@ -1789,7 +1789,7 @@ function App() {
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="label-text font-semibold">
+                      <span className="text-sm font-semibold">
                         利用可能なモデル
                       </span>
                       <button
@@ -1918,16 +1918,16 @@ function App() {
                 </summary>
                 <div className="collapse-content">
                   <div className="space-y-4">
-                    <div className="form-control">
-                      <label className="label">
-                        <span className="label-text">入力デバイス</span>
+                    <div className="flex flex-col gap-1">
+                      <label className="label py-1 whitespace-normal text-base-content">
+                        <span className="text-sm">入力デバイス</span>
                       </label>
                       <select
                         value={selectedAudioDevice}
                         onChange={(e) =>
                           handleAudioDeviceChange(e.target.value)
                         }
-                        className="select select-bordered w-full"
+                        className="select w-full"
                       >
                         {audioDevices.map((device) => (
                           <option key={device.name} value={device.name}>
@@ -1946,9 +1946,9 @@ function App() {
                   録画・保存設定
                 </summary>
                 <div className="collapse-content space-y-4">
-                  <div className="form-control">
-                    <label className="label cursor-pointer">
-                      <span className="label-text">録画/音声を保存</span>
+                  <div className="flex flex-col gap-1">
+                    <label className="label cursor-pointer justify-between w-full gap-2 py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">録画/音声を保存</span>
                       <input
                         type="checkbox"
                         className="toggle toggle-primary"
@@ -1963,9 +1963,9 @@ function App() {
                     </label>
                   </div>
                   {recordingSaveEnabled && (
-                    <div className="form-control">
-                      <label className="label">
-                        <span className="label-text">保存先フォルダ</span>
+                    <div className="flex flex-col gap-1">
+                      <label className="label py-1 whitespace-normal text-base-content">
+                        <span className="text-sm">保存先フォルダ</span>
                       </label>
                       <input
                         type="text"
@@ -1978,19 +1978,15 @@ function App() {
                             recordingSavePath,
                           )
                         }
-                        className="input input-bordered w-full"
+                        className="input w-full"
                       />
-                      <label className="label">
-                        <span className="label-text-alt opacity-70">
-                          録画時はMP4、音声のみの場合はWAVファイルとして保存されます
-                        </span>
-                      </label>
+                      <p className="text-xs opacity-70">録画時はMP4、音声のみの場合はWAVファイルとして保存されます</p>
                     </div>
                   )}
 
-                  <div className="form-control">
-                    <label className="label cursor-pointer">
-                      <span className="label-text">画面録画を有効化</span>
+                  <div className="flex flex-col gap-1">
+                    <label className="label cursor-pointer justify-between w-full gap-2 py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">画面録画を有効化</span>
                       <input
                         type="checkbox"
                         className="toggle toggle-primary"
@@ -2000,11 +1996,7 @@ function App() {
                         }
                       />
                     </label>
-                    <label className="label">
-                      <span className="label-text-alt opacity-70">
-                        有効時は録画ボタンで画面+音声を録画、無効時は音声のみ保存
-                      </span>
-                    </label>
+                    <p className="text-xs opacity-70">有効時は録画ボタンで画面+音声を録画、無効時は音声のみ保存</p>
                   </div>
                 </div>
               </details>
@@ -2015,7 +2007,7 @@ function App() {
                 </summary>
                 <div className="collapse-content space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="label-text font-semibold">
+                    <span className="text-sm font-semibold">
                       Whisper モデル設定
                     </span>
                     <button
@@ -2030,8 +2022,8 @@ function App() {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="label">
-                      <span className="label-text">
+                    <label className="label py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">
                         コンテキスト長 (audio_ctx: {whisperParams.audioCtx})
                       </span>
                     </label>
@@ -2066,13 +2058,13 @@ function App() {
                             parseInt(e.target.value, 10) || prev.audioCtx,
                         }))
                       }
-                      className="input input-bordered input-sm w-32"
+                      className="input input-sm w-32"
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <label className="label">
-                      <span className="label-text">
+                    <label className="label py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">
                         温度 (temperature:{" "}
                         {whisperParams.temperature.toFixed(2)})
                       </span>
@@ -2108,7 +2100,7 @@ function App() {
                             parseFloat(e.target.value) ?? prev.temperature,
                         }))
                       }
-                      className="input input-bordered input-sm w-32"
+                      className="input input-sm w-32"
                     />
                   </div>
                 </div>
@@ -2120,7 +2112,7 @@ function App() {
                 </summary>
                 <div className="collapse-content space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="label-text font-semibold">
+                    <span className="text-sm font-semibold">
                       ストリーミング設定
                     </span>
                     <button
@@ -2135,8 +2127,8 @@ function App() {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="label">
-                      <span className="label-text">
+                    <label className="label py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">
                         VAD 閾値 ({streamingConfig.vadThreshold.toFixed(3)})
                       </span>
                     </label>
@@ -2169,13 +2161,13 @@ function App() {
                           vadThreshold: parseFloat(e.target.value) || 0.1,
                         }))
                       }
-                      className="input input-bordered input-sm w-32"
+                      className="input input-sm w-32"
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <label className="label">
-                      <span className="label-text">文字起こし間隔 (秒)</span>
+                    <label className="label py-1 whitespace-normal text-base-content">
+                      <span className="text-sm">文字起こし間隔 (秒)</span>
                     </label>
                     <p className="text-xs opacity-60">
                       短くすると小刻みに更新され、長くするとまとまった文章で届きます。
@@ -2207,7 +2199,7 @@ function App() {
                             parseFloat(e.target.value) || 4,
                         }))
                       }
-                      className="input input-bordered input-sm w-32"
+                      className="input input-sm w-32"
                     />
                   </div>
                 </div>
