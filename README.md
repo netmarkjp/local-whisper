@@ -37,9 +37,6 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
    ```bash
    git clone <repository-url>
    cd local-whisper
-   # Optional: whisper-rs-sys bundles whisper.cpp, so this is not required to build.
-   # It only provides the Metal resources under vendor/whisper.cpp referenced by crates/asr-core/build.rs.
-   git submodule update --init --recursive
    ```
 
 2. **Install dependencies**

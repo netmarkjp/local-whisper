@@ -32,9 +32,6 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
    ```bash
    git clone <repository-url>
    cd local-whisper
-   # 任意: whisper-rs-sys が whisper.cpp を同梱するためビルドには不要です。
-   # crates/asr-core/build.rs が参照する vendor/whisper.cpp 配下の Metal リソースを取得したい場合のみ実行します。
-   git submodule update --init --recursive
    ```
 
 2. **依存関係をインストール**
