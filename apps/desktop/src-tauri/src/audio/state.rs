@@ -2,7 +2,6 @@ use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use asr_core::WhisperParams;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex as ParkingMutex;
 use voice_activity_detector::VoiceActivityDetector;
@@ -10,8 +9,7 @@ use voice_activity_detector::VoiceActivityDetector;
 use crate::transcription::{TranscriptionCommand, TranscriptionSource};
 
 use super::constants::{
-    calculate_session_max_samples, DEFAULT_PARTIAL_TRANSCRIPT_INTERVAL_SAMPLES,
-    DEFAULT_VAD_THRESHOLD, VAD_SAMPLE_RATE,
+    DEFAULT_PARTIAL_TRANSCRIPT_INTERVAL_SAMPLES, DEFAULT_VAD_THRESHOLD, VAD_SAMPLE_RATE,
 };
 
 #[derive(Debug)]
@@ -57,13 +55,11 @@ pub struct RecordingState {
     pub suppress_transcription: bool,
     pub current_recording_dir: Option<String>,
     pub last_vad_event_time: Instant,
-    pub session_max_samples: usize,
     pub mic_transcription: SourceTranscriptionState,
     pub system_transcription: SourceTranscriptionState,
 }
 
 pub fn default_recording_state() -> RecordingState {
-    let default_params = WhisperParams::default();
     RecordingState {
         is_recording: false,
         is_muted: true,
@@ -89,7 +85,6 @@ pub fn default_recording_state() -> RecordingState {
         suppress_transcription: false,
         current_recording_dir: None,
         last_vad_event_time: Instant::now(),
-        session_max_samples: calculate_session_max_samples(default_params.audio_ctx),
         mic_transcription: SourceTranscriptionState::default(),
         system_transcription: SourceTranscriptionState::default(),
     }

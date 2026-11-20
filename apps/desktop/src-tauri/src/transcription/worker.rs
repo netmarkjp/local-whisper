@@ -1,133 +1,15 @@
-use asr_core::TranscribedSegment;
-use log::{debug, error, info};
-use serde::{Deserialize, Serialize};
+use asr_core::TranscribeOptions;
+use log::{debug, error};
 use std::sync::mpsc;
 use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 use tauri::AppHandle;
 
-use crate::audio::constants::VAD_SAMPLE_RATE;
+use crate::asr::current_model;
 use crate::audio::state::{try_recording_state, RecordingState};
 use crate::emit_transcription_segment;
-use crate::whisper::WHISPER_CTX;
 
 use super::{TranscriptionCommand, TranscriptionSource};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreparedSegment {
-    pub text: String,
-    pub start_ms: i64,
-    pub end_ms: i64,
-}
-
-fn slice_audio_segment(audio_data: &[f32], start_ms: i64, end_ms: i64) -> Vec<f32> {
-    if start_ms >= end_ms {
-        return Vec::new();
-    }
-
-    let start_sample =
-        ((start_ms * VAD_SAMPLE_RATE as i64) / 1000).clamp(0, audio_data.len() as i64) as usize;
-    let end_sample =
-        ((end_ms * VAD_SAMPLE_RATE as i64) / 1000).clamp(0, audio_data.len() as i64) as usize;
-
-    if start_sample >= end_sample || start_sample >= audio_data.len() {
-        return Vec::new();
-    }
-    audio_data[start_sample..end_sample.min(audio_data.len())].to_vec()
-}
-
-fn split_segments_on_punctuation(segments: &[TranscribedSegment]) -> Vec<PreparedSegment> {
-    const TERMINATORS: &[char] = &['。', '！', '？', '．', '!', '?', '.', ',', '、'];
-    const FINALIZE_THRESHOLD_MS: i64 = 1_500;
-
-    let mut prepared = Vec::new();
-    let mut current_text = String::new();
-    let mut current_start: Option<i64> = None;
-    let mut current_end: i64 = 0;
-
-    let last_segment_end_ms = segments.last().map(|s| s.end_ms).unwrap_or(0);
-
-    debug!(
-        "[split_segments] Processing {} segments, last_segment_end_ms={}",
-        segments.len(),
-        last_segment_end_ms
-    );
-    for (seg_idx, segment) in segments.iter().enumerate() {
-        debug!(
-            "[split_segments] segment #{}: {}ms-{}ms, text='{}'",
-            seg_idx, segment.start_ms, segment.end_ms, segment.text
-        );
-
-        if current_start.is_none() {
-            current_start = Some(segment.start_ms);
-        }
-
-        current_text.push_str(&segment.text);
-        current_end = segment.end_ms;
-
-        let has_terminator = segment
-            .text
-            .chars()
-            .rev()
-            .find(|c| !c.is_whitespace())
-            .map(|c| TERMINATORS.contains(&c))
-            .unwrap_or(false);
-
-        let is_far_enough_from_end =
-            (last_segment_end_ms - segment.end_ms) >= FINALIZE_THRESHOLD_MS;
-        let should_split = has_terminator && is_far_enough_from_end;
-
-        if should_split {
-            let text = current_text.clone();
-            let has_content = text.chars().any(|c| !c.is_whitespace());
-            debug!(
-                "[split_segments]   segment #{} triggers split (end_ms={}, last_end_ms={}, diff={}ms), accumulated text='{}'",
-                seg_idx, segment.end_ms, last_segment_end_ms, last_segment_end_ms - segment.end_ms,
-                text.replace('\n', " ")
-            );
-            if has_content {
-                prepared.push(PreparedSegment {
-                    text,
-                    start_ms: current_start.unwrap_or(segment.start_ms),
-                    end_ms: current_end,
-                });
-            }
-            current_text.clear();
-            current_start = None;
-        }
-    }
-
-    if current_text.chars().any(|c| !c.is_whitespace()) {
-        debug!(
-            "[split_segments]   final accumulated text='{}'",
-            current_text.replace('\n', " ")
-        );
-        prepared.push(PreparedSegment {
-            text: current_text.clone(),
-            start_ms: current_start.unwrap_or(0),
-            end_ms: current_end,
-        });
-    }
-
-    if prepared.len() > 2 {
-        let mut combined = prepared.first().cloned().unwrap();
-        for segment in prepared.iter().take(prepared.len() - 1).skip(1) {
-            if !combined.text.trim_end().is_empty() {
-                combined.text.push('\n');
-            }
-            combined.text.push_str(segment.text.trim_start());
-            combined.end_ms = segment.end_ms;
-        }
-        let last = prepared.last().cloned().unwrap();
-        prepared = vec![combined, last];
-    }
-
-    debug!(
-        "[split_segments] Result: {} prepared segments",
-        prepared.len()
-    );
-    prepared
-}
 
 pub fn spawn_transcription_worker(
     app_handle: AppHandle,
@@ -214,6 +96,11 @@ pub fn spawn_transcription_worker(
     (tx, handle)
 }
 
+/// Transcribes the not-yet-finalized part of a session and emits it.
+///
+/// Qwen3-ASR returns text without timestamps, so a session cannot be finalized piecewise:
+/// a partial request re-transcribes everything after `transcribed_samples` and replaces the
+/// pending text in the UI; the final request emits the same span as final.
 pub fn transcribe_and_emit_common(
     audio_data: &[f32],
     language: &str,
@@ -224,117 +111,47 @@ pub fn transcribe_and_emit_common(
     message_id_counter: u64,
     transcribed_samples: usize,
 ) -> Result<(usize, u64), String> {
-    let ctx_lock = WHISPER_CTX
-        .get()
-        .ok_or_else(|| "Whisper not initialized".to_string())?
-        .clone();
-    let ctx_guard = ctx_lock.lock().unwrap();
-    let ctx = ctx_guard
-        .as_ref()
-        .ok_or_else(|| "Whisper context not available".to_string())?;
+    let model = current_model().ok_or_else(|| "ASR model not initialized".to_string())?;
 
-    let mut next_message_id = message_id_counter;
-
-    // Skip already transcribed samples
     if transcribed_samples >= audio_data.len() {
         debug!(
-            "[transcribe_and_emit_common] Skipping transcription: already transcribed {} samples, audio length {}",
+            "[transcribe_and_emit_common] Skipping: already transcribed {} of {} samples",
             transcribed_samples,
             audio_data.len()
         );
-        return Ok((transcribed_samples, next_message_id));
+        return Ok((transcribed_samples, message_id_counter));
     }
 
     let audio_to_transcribe = &audio_data[transcribed_samples..];
+    let options = TranscribeOptions {
+        language: Some(language.to_string()),
+        context: None,
+    };
+    let text = model
+        .transcribe(audio_to_transcribe, &options)
+        .map_err(|e| e.to_string())?;
     debug!(
-        "[transcribe_and_emit_common] Transcribing from sample {} to {}, total {} samples",
-        transcribed_samples,
-        audio_data.len(),
-        audio_to_transcribe.len()
+        "[transcribe_and_emit_common] {} samples -> {:?} (final={})",
+        audio_to_transcribe.len(),
+        text,
+        is_final
     );
+
+    emit_transcription_segment(
+        app_handle,
+        text,
+        is_final.then(|| audio_to_transcribe.to_vec()),
+        session_id_counter,
+        message_id_counter,
+        is_final,
+        source.to_string(),
+    )?;
 
     if is_final {
-        let text = ctx
-            .transcribe_with_language(audio_to_transcribe, language)
-            .map_err(|e| e.to_string())?;
-
-        emit_transcription_segment(
-            app_handle,
-            text,
-            Some(audio_to_transcribe.to_vec()),
-            session_id_counter,
-            next_message_id,
-            is_final,
-            source.to_string(),
-        )?;
-
-        next_message_id = next_message_id.wrapping_add(1);
-
-        return Ok((audio_data.len(), next_message_id));
+        Ok((audio_data.len(), message_id_counter.wrapping_add(1)))
+    } else {
+        Ok((transcribed_samples, message_id_counter))
     }
-
-    let segments = ctx
-        .transcribe_segments_with_language(audio_to_transcribe, language)
-        .map_err(|e| e.to_string())?;
-
-    let prepared_segments = split_segments_on_punctuation(&segments);
-    info!(
-        "[transcribe_and_emit_common] Got {} prepared segments from {} segments",
-        prepared_segments.len(),
-        segments.len()
-    );
-
-    let total_segments = prepared_segments.len();
-    let mut new_transcribed_samples = transcribed_samples;
-
-    for (idx, segment) in prepared_segments.iter().enumerate() {
-        let segment_is_final = total_segments > 0 && idx + 1 != total_segments;
-
-        // Calculate absolute sample position in the original audio
-        let segment_start_samples = transcribed_samples + ((segment.start_ms * VAD_SAMPLE_RATE as i64) / 1000) as usize;
-        let segment_end_samples = transcribed_samples + ((segment.end_ms * VAD_SAMPLE_RATE as i64) / 1000) as usize;
-
-        debug!(
-            "[transcribe_and_emit_common] Emitting segment #{}: {}ms - {}ms (samples {} - {}), text=\"{}\", is_final={}",
-            idx,
-            segment.start_ms,
-            segment.end_ms,
-            segment_start_samples,
-            segment_end_samples,
-            segment.text.replace('\n', " "),
-            segment_is_final
-        );
-
-        let segment_audio = slice_audio_segment(audio_to_transcribe, segment.start_ms, segment.end_ms);
-
-        if let Err(err) = emit_transcription_segment(
-            app_handle,
-            segment.text.clone(),
-            if segment_audio.is_empty() {
-                None
-            } else {
-                Some(segment_audio)
-            },
-            session_id_counter,
-            next_message_id,
-            segment_is_final,
-            source.to_string(),
-        ) {
-            error!("Failed to emit transcription segment: {}", err);
-        }
-
-        if segment_is_final {
-            // Update transcribed samples to the end of this finalized segment
-            new_transcribed_samples = segment_end_samples;
-            next_message_id = next_message_id.wrapping_add(1);
-            debug!(
-                "[transcribe_and_emit_common] Updated transcribed_samples to {}",
-                new_transcribed_samples
-            );
-        }
-    }
-
-    Ok((new_transcribed_samples, next_message_id))
 }
 
 fn transcribe_and_emit(

@@ -16,12 +16,11 @@ mod mic;
 mod screen_recording;
 mod system_audio;
 mod transcription;
-mod whisper;
+mod asr;
 
-pub use whisper::{
-    delete_model_impl, get_whisper_params_impl, initialize_whisper_impl, install_model_impl,
-    list_remote_models_impl, scan_models_impl, set_whisper_params_impl, ModelInfo,
-    RemoteModelStatus, WhisperParamsConfig,
+pub use asr::{
+    delete_model_impl, initialize_model_impl, install_model_impl, list_remote_models_impl,
+    scan_models_impl, ModelInfo, RemoteModelStatus,
 };
 
 use audio::constants::VAD_SAMPLE_RATE;

@@ -7,18 +7,8 @@ async fn scan_models() -> Result<Vec<ModelInfo>, String> {
 }
 
 #[tauri::command]
-async fn initialize_whisper(model_path: String) -> Result<String, String> {
-    crate::initialize_whisper_impl(model_path).await
-}
-
-#[tauri::command]
-async fn get_whisper_params() -> Result<WhisperParamsConfig, String> {
-    crate::get_whisper_params_impl().await
-}
-
-#[tauri::command]
-async fn set_whisper_params(config: WhisperParamsConfig) -> Result<(), String> {
-    crate::set_whisper_params_impl(config).await
+async fn initialize_model(model_path: String) -> Result<String, String> {
+    crate::initialize_model_impl(model_path).await
 }
 
 #[tauri::command]
@@ -164,9 +154,7 @@ async fn set_transcription_suppressed(enabled: bool) -> Result<(), String> {
 pub fn register<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
         scan_models,
-        initialize_whisper,
-        get_whisper_params,
-        set_whisper_params,
+        initialize_model,
         list_remote_models,
         install_model,
         delete_model,

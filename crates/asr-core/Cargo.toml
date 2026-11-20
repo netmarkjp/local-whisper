@@ -5,8 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-whisper-rs = { version = "0.16", features = ["metal"] }
+# Qwen3-ASR runs on llama.cpp's multimodal (mtmd) path. llama.cpp embeds its Metal shaders
+# (GGML_METAL_EMBED_LIBRARY), so the build needs only the Command Line Tools, not Xcode.
+# OpenMP (a default feature) is off: Apple clang ships without libomp.
+llama-cpp-2 = { version = "=0.1.161", default-features = false, features = ["metal", "mtmd"] }
+# Same version as llama-cpp-2's own dependency; used directly only to install a log callback.
+llama-cpp-sys-2 = { version = "=0.1.161", default-features = false }
+log = "0.4"
 thiserror = "2"
 hound = "3.5"
 anyhow = "1"
+env_logger = "0.11.8"
 voice_activity_detector = "0.2.1"

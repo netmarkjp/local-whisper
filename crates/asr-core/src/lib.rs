@@ -1,262 +1,312 @@
-use std::borrow::Cow;
+//! Speech recognition core: Qwen3-ASR running on llama.cpp's multimodal (mtmd) audio path.
+//!
+//! A model is a pair of GGUF files: the text decoder (`Qwen3-ASR-*.gguf`) and the audio
+//! encoder/projector (`mmproj-Qwen3-ASR-*.gguf`).
+
 use std::ffi::CStr;
+use std::num::NonZeroU32;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
-use thiserror::Error;
-use whisper_rs::{
-    FullParams, GGMLLogLevel, SamplingStrategy, WhisperContext as WhisperRsContext,
-    WhisperContextParameters,
-};
+use std::sync::{Mutex, OnceLock};
 
-const WHISPER_SAMPLE_RATE: usize = 16_000;
-const MIN_AUDIO_DURATION_S: usize = 2;
-const MIN_AUDIO_SAMPLES: usize = WHISPER_SAMPLE_RATE * MIN_AUDIO_DURATION_S;
-static WHISPER_LOG_INIT: Once = Once::new();
+use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::llama_batch::LlamaBatch;
+use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::model::params::LlamaModelParams;
+use llama_cpp_2::mtmd::{
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker,
+};
+use llama_cpp_2::sampling::LlamaSampler;
+use thiserror::Error;
+
+pub const SAMPLE_RATE: usize = 16_000;
+
+/// Qwen3-ASR's audio encoder needs a little audio to produce any frames; shorter clips are
+/// left-padded with silence.
+const MIN_AUDIO_SAMPLES: usize = SAMPLE_RATE / 2;
+/// Context window for one utterance: the prompt, the audio embeddings and the transcript.
+/// The app sends at most ~30 s per request; Qwen3-ASR uses ~13 audio tokens per second.
+const N_CTX: u32 = 4096;
+const N_BATCH: u32 = 2048;
+/// Separates the language tag from the transcript in Qwen3-ASR's output
+/// (`language Japanese<asr_text>...`).
+const ASR_TEXT_TAG: &str = "<asr_text>";
+
+static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 static LAST_LOG_EMITTED: AtomicBool = AtomicBool::new(false);
 
-unsafe extern "C" fn whisper_log_filter_callback(
-    level: u32,
-    text: *const c_char,
-    _user_data: *mut c_void,
-) {
+/// Routes llama.cpp / ggml / mtmd logs to the `log` facade: warnings and errors at their own
+/// level, everything else at `trace` (llama.cpp is very chatty at INFO).
+unsafe extern "C" fn llama_log_callback(level: u32, text: *const c_char, _user_data: *mut c_void) {
     if text.is_null() {
         return;
     }
-
     let msg = unsafe { CStr::from_ptr(text) }.to_string_lossy();
-
-    // Suppress verbose decoder traces such as:
-    // "whisper_full_with_state: id = ..."
-    let suppressed = msg.contains("whisper_full_with_state");
-
-    // Keep only warning/error messages from whisper.cpp.
-    // ggml_log_level (whisper-rs-sys 0.15): NONE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4, CONT=5.
-    // CONT continues the previous message, so it inherits that message's verdict
-    // (including suppression of trace lines).
-    let emit = match GGMLLogLevel::from(level) {
-        GGMLLogLevel::Cont => !suppressed && LAST_LOG_EMITTED.load(Ordering::Relaxed),
-        other => {
-            let keep = !suppressed && matches!(other, GGMLLogLevel::Warn | GGMLLogLevel::Error);
-            LAST_LOG_EMITTED.store(keep, Ordering::Relaxed);
-            keep
+    // ggml_log_level: NONE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4, CONT=5. CONT continues the
+    // previous message and inherits its level.
+    let level = match level {
+        3 => log::Level::Warn,
+        4 => log::Level::Error,
+        5 => {
+            if LAST_LOG_EMITTED.load(Ordering::Relaxed) {
+                log::Level::Warn
+            } else {
+                log::Level::Trace
+            }
         }
+        _ => log::Level::Trace,
     };
-    if emit {
-        eprint!("{msg}");
-    }
+    LAST_LOG_EMITTED.store(level <= log::Level::Warn, Ordering::Relaxed);
+    log::log!(target: "llama_cpp", level, "{}", msg.trim_end());
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct WhisperParams {
-    pub audio_ctx: i32,
-    pub temperature: f32,
-}
-
-impl Default for WhisperParams {
-    fn default() -> Self {
-        Self {
-            audio_ctx: 1500,
-            temperature: 0.0,
-        }
+fn backend() -> Result<&'static LlamaBackend, AsrError> {
+    if let Some(backend) = BACKEND.get() {
+        return Ok(backend);
     }
-}
-
-impl WhisperParams {
-    pub fn clamped(self) -> Self {
-        Self {
-            audio_ctx: self.audio_ctx.clamp(64, 1500),
-            temperature: self.temperature.clamp(0.0, 1.0),
-        }
+    // SAFETY: the callback is a plain function that only reads the C string it is given.
+    unsafe {
+        llama_cpp_sys_2::llama_log_set(Some(llama_log_callback), std::ptr::null_mut());
+        llama_cpp_sys_2::mtmd_helper_log_set(Some(llama_log_callback), std::ptr::null_mut());
+        llama_cpp_sys_2::ggml_log_set(Some(llama_log_callback), std::ptr::null_mut());
     }
+    let backend =
+        LlamaBackend::init().map_err(|e| AsrError::InitializationFailed(e.to_string()))?;
+    Ok(BACKEND.get_or_init(|| backend))
 }
 
 #[derive(Error, Debug)]
-pub enum WhisperError {
-    #[error("Failed to initialize context: {0}")]
+pub enum AsrError {
+    #[error("Failed to initialize model: {0}")]
     InitializationFailed(String),
     #[error("Failed to process audio: {0}")]
     ProcessingFailed(String),
-    #[error("Invalid model path")]
-    InvalidModelPath,
 }
 
-pub struct WhisperContext {
-    ctx: WhisperRsContext,
-    params: WhisperParams,
+#[derive(Debug, Clone, Default)]
+pub struct TranscribeOptions {
+    /// ISO 639-1 code (e.g. "ja"). `None`, "auto" or an unsupported code lets the model detect
+    /// the language.
+    pub language: Option<String>,
+    /// Optional context text (domain terms, names) placed in the system turn to bias
+    /// recognition.
+    pub context: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct TranscribedSegment {
-    pub text: String,
-    pub start_ms: i64,
-    pub end_ms: i64,
-    pub words: Vec<TranscribedWord>,
+pub struct AsrModel {
+    model: LlamaModel,
+    /// Encoding is not thread-safe, so the multimodal context is used under a lock.
+    mtmd: Mutex<MtmdContext>,
 }
 
-#[derive(Debug, Clone)]
-pub struct TranscribedWord {
-    pub text: String,
-    pub start_ms: i64,
-    pub end_ms: i64,
-}
+impl AsrModel {
+    /// Loads the model with Metal acceleration.
+    pub fn load<P: AsRef<Path>, Q: AsRef<Path>>(
+        model_path: P,
+        mmproj_path: Q,
+    ) -> Result<Self, AsrError> {
+        Self::load_with_device(model_path, mmproj_path, true)
+    }
 
-impl WhisperContext {
-    pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self, WhisperError> {
-        WHISPER_LOG_INIT.call_once(|| unsafe {
-            whisper_rs::set_log_callback(Some(whisper_log_filter_callback), std::ptr::null_mut());
-        });
+    /// Loads the model, on the GPU (Metal) or CPU only.
+    pub fn load_with_device<P: AsRef<Path>, Q: AsRef<Path>>(
+        model_path: P,
+        mmproj_path: Q,
+        use_gpu: bool,
+    ) -> Result<Self, AsrError> {
+        let backend = backend()?;
+        let model_params = if use_gpu {
+            LlamaModelParams::default().with_n_gpu_layers(u32::MAX)
+        } else {
+            // An empty device list keeps llama.cpp from initializing Metal at all.
+            LlamaModelParams::default()
+                .with_n_gpu_layers(0)
+                .with_devices(&[])
+                .map_err(|e| AsrError::InitializationFailed(e.to_string()))?
+        };
+        let model = LlamaModel::load_from_file(backend, model_path.as_ref(), &model_params)
+            .map_err(|e| AsrError::InitializationFailed(format!("text model: {e}")))?;
 
-        let mut ctx_params = WhisperContextParameters::default();
-        ctx_params.use_gpu(true).flash_attn(true);
-
-        let ctx = WhisperRsContext::new_with_params(
-            model_path
-                .as_ref()
-                .to_str()
-                .ok_or(WhisperError::InvalidModelPath)?,
-            ctx_params,
-        )
-        .map_err(|e| WhisperError::InitializationFailed(e.to_string()))?;
+        let mmproj_path = mmproj_path
+            .as_ref()
+            .to_str()
+            .ok_or_else(|| AsrError::InitializationFailed("invalid mmproj path".into()))?;
+        let mtmd_params = MtmdContextParams {
+            use_gpu,
+            print_timings: false,
+            n_threads: num_threads(),
+            ..MtmdContextParams::default()
+        };
+        let mtmd = MtmdContext::init_from_file(mmproj_path, &model, &mtmd_params)
+            .map_err(|e| AsrError::InitializationFailed(format!("mmproj: {e}")))?;
+        if !mtmd.support_audio() {
+            return Err(AsrError::InitializationFailed(
+                "mmproj does not support audio input".into(),
+            ));
+        }
 
         Ok(Self {
-            ctx,
-            params: WhisperParams::default(),
+            model,
+            mtmd: Mutex::new(mtmd),
         })
     }
 
-    pub fn transcribe(&self, audio_data: &[f32]) -> Result<String, WhisperError> {
-        self.transcribe_with_language(audio_data, "ja")
-    }
-
-    pub fn set_params(&mut self, params: WhisperParams) {
-        self.params = params.clamped();
-    }
-
-    pub fn params(&self) -> WhisperParams {
-        self.params
-    }
-
-    pub fn transcribe_segments_with_language(
+    /// Transcribes 16 kHz mono f32 PCM and returns the recognized text.
+    pub fn transcribe(
         &self,
-        audio_data: &[f32],
-        language: &str,
-    ) -> Result<Vec<TranscribedSegment>, WhisperError> {
-        let mut state = self
-            .ctx
-            .create_state()
-            .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_print_progress(false);
-        params.set_print_special(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_translate(false);
-        params.set_language(Some(language));
-        params.set_n_threads(num_cpus());
-        params.set_single_segment(false);
-        params.set_audio_ctx(self.params.audio_ctx);
-        params.set_temperature(self.params.temperature);
-        params.set_token_timestamps(true);
-        params.set_thold_pt(0.01);
-        params.set_thold_ptsum(0.01);
-        params.set_max_len(1);
-        params.set_split_on_word(true);
-
-        let audio_for_inference = ensure_min_audio_duration(audio_data);
-        let inference_start = Instant::now();
-        state
-            .full(params, audio_for_inference.as_ref())
-            .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-        let _inference_elapsed = inference_start.elapsed();
-
-        let num_segments = state.full_n_segments();
-
-        let mut segments = Vec::with_capacity(num_segments.max(0) as usize);
-        for i in 0..num_segments {
-            let segment = state.get_segment(i).ok_or_else(|| {
-                WhisperError::ProcessingFailed(format!("segment {i} out of bounds"))
-            })?;
-            let text = segment
-                .to_str_lossy()
-                .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?
-                .into_owned();
-            let words = collect_words(&segment)?;
-            segments.push(TranscribedSegment {
-                text,
-                start_ms: segment.start_timestamp() * 10,
-                end_ms: segment.end_timestamp() * 10,
-                words,
-            });
-        }
-
-        Ok(segments)
-    }
-
-    pub fn transcribe_with_language(
-        &self,
-        audio_data: &[f32],
-        language: &str,
-    ) -> Result<String, WhisperError> {
-        let segments = self.transcribe_segments_with_language(audio_data, language)?;
-        let mut full_text = String::new();
-        for segment in segments {
-            full_text.push_str(&segment.text);
-        }
-        Ok(full_text)
-    }
-}
-
-fn collect_words(
-    segment: &whisper_rs::WhisperSegment<'_>,
-) -> Result<Vec<TranscribedWord>, WhisperError> {
-    let token_count = segment.n_tokens();
-
-    let mut words = Vec::with_capacity(token_count.max(0) as usize);
-    for token_idx in 0..token_count {
-        let Some(token) = segment.get_token(token_idx) else {
-            continue;
+        audio: &[f32],
+        options: &TranscribeOptions,
+    ) -> Result<String, AsrError> {
+        let backend = backend()?;
+        let failed = |stage: &str, e: &dyn std::fmt::Display| {
+            AsrError::ProcessingFailed(format!("{stage}: {e}"))
         };
-        let token_text = token
-            .to_str_lossy()
-            .map_err(|e| WhisperError::ProcessingFailed(e.to_string()))?;
-        let token_data = token.token_data();
 
-        if token_data.t0 < 0 || token_data.t1 <= token_data.t0 {
-            continue;
+        let audio = pad_to_min_length(audio);
+        let language = options.language.as_deref().and_then(qwen3_language_name);
+        let prompt = build_prompt(language, options.context.as_deref());
+
+        let mut mtmd = self
+            .mtmd
+            .lock()
+            .map_err(|_| AsrError::ProcessingFailed("mtmd lock poisoned".into()))?;
+
+        let bitmap = MtmdBitmap::from_audio_data(&audio).map_err(|e| failed("audio", &e))?;
+        let chunks = mtmd
+            .tokenize(
+                MtmdInputText {
+                    text: prompt,
+                    add_special: true,
+                    parse_special: true,
+                },
+                &[&bitmap],
+            )
+            .map_err(|e| failed("tokenize", &e))?;
+
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(N_CTX))
+            .with_n_batch(N_BATCH)
+            .with_n_ubatch(N_BATCH)
+            .with_n_threads(num_threads())
+            .with_n_threads_batch(num_threads());
+        let mut ctx = self
+            .model
+            .new_context(backend, ctx_params)
+            .map_err(|e| failed("context", &e))?;
+
+        let prompt_end = chunks
+            .eval_chunks(&mut mtmd, &mut ctx, 0, 0, N_BATCH as i32, true)
+            .map_err(|e| failed("eval", &e))?;
+        drop(mtmd);
+
+        let generation_end =
+            prompt_end + max_new_tokens(audio.len()).min(N_CTX as i32 - prompt_end);
+        let vocab = self.model.vocab();
+        let mut sampler = LlamaSampler::greedy();
+        let mut batch = LlamaBatch::new(1, 1);
+        let mut output = Vec::new();
+        for pos in prompt_end..generation_end {
+            let token = sampler.sample(&ctx, -1);
+            if vocab.is_eog(token) {
+                break;
+            }
+            output.extend_from_slice(&vocab.token_to_piece(token, false, None));
+
+            batch.clear();
+            batch
+                .add(token, pos, &[0], true)
+                .map_err(|e| failed("batch", &e))?;
+            ctx.decode(&mut batch).map_err(|e| failed("decode", &e))?;
         }
 
-        let trimmed = token_text.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        words.push(TranscribedWord {
-            text: trimmed.to_string(),
-            start_ms: token_data.t0 * 10,
-            end_ms: token_data.t1 * 10,
-        });
-    }
-
-    Ok(words)
-}
-
-fn ensure_min_audio_duration(audio_data: &[f32]) -> Cow<'_, [f32]> {
-    if audio_data.len() >= MIN_AUDIO_SAMPLES {
-        Cow::Borrowed(audio_data)
-    } else {
-        let pad_len = MIN_AUDIO_SAMPLES - audio_data.len();
-        let mut padded = Vec::with_capacity(MIN_AUDIO_SAMPLES);
-        padded.resize(pad_len, 0.0);
-        padded.extend_from_slice(audio_data);
-        Cow::Owned(padded)
+        Ok(extract_transcript(&String::from_utf8_lossy(&output)))
     }
 }
 
-fn num_cpus() -> i32 {
+/// Qwen3-ASR chat prompt. When the language is known it is forced by pre-filling the
+/// assistant turn with the language tag, so the model emits only the transcript.
+fn build_prompt(language: Option<&str>, context: Option<&str>) -> String {
+    let marker = mtmd_default_marker();
+    let context = context.unwrap_or("");
+    let mut prompt = format!(
+        "<|im_start|>system\n{context}<|im_end|>\n\
+         <|im_start|>user\n{marker}<|im_end|>\n\
+         <|im_start|>assistant\n"
+    );
+    if let Some(language) = language {
+        prompt.push_str("language ");
+        prompt.push_str(language);
+        prompt.push_str(ASR_TEXT_TAG);
+    }
+    prompt
+}
+
+/// Drops the `language X<asr_text>` header the model emits when the language was not forced.
+fn extract_transcript(raw: &str) -> String {
+    let text = match raw.find(ASR_TEXT_TAG) {
+        Some(pos) => &raw[pos + ASR_TEXT_TAG.len()..],
+        None => raw,
+    };
+    text.trim().to_string()
+}
+
+/// Upper bound on generated tokens, proportional to the audio length. Guards against
+/// repetition loops running to the end of the context.
+fn max_new_tokens(samples: usize) -> i32 {
+    let seconds = samples as f32 / SAMPLE_RATE as f32;
+    (seconds * 20.0) as i32 + 32
+}
+
+fn pad_to_min_length(audio: &[f32]) -> Vec<f32> {
+    if audio.len() >= MIN_AUDIO_SAMPLES {
+        return audio.to_vec();
+    }
+    let mut padded = vec![0.0; MIN_AUDIO_SAMPLES - audio.len()];
+    padded.extend_from_slice(audio);
+    padded
+}
+
+/// Maps an ISO 639-1 code to the language name Qwen3-ASR expects in its prompt.
+pub fn qwen3_language_name(code: &str) -> Option<&'static str> {
+    let name = match code.trim().to_ascii_lowercase().as_str() {
+        "ja" => "Japanese",
+        "en" => "English",
+        "zh" => "Chinese",
+        "yue" => "Cantonese",
+        "ko" => "Korean",
+        "ar" => "Arabic",
+        "de" => "German",
+        "fr" => "French",
+        "es" => "Spanish",
+        "pt" => "Portuguese",
+        "id" => "Indonesian",
+        "it" => "Italian",
+        "ru" => "Russian",
+        "th" => "Thai",
+        "vi" => "Vietnamese",
+        "tr" => "Turkish",
+        "hi" => "Hindi",
+        "ms" => "Malay",
+        "nl" => "Dutch",
+        "sv" => "Swedish",
+        "da" => "Danish",
+        "fi" => "Finnish",
+        "pl" => "Polish",
+        "cs" => "Czech",
+        "fil" | "tl" => "Filipino",
+        "fa" => "Persian",
+        "el" => "Greek",
+        "ro" => "Romanian",
+        "hu" => "Hungarian",
+        "mk" => "Macedonian",
+        _ => return None,
+    };
+    Some(name)
+}
+
+fn num_threads() -> i32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as i32)
         .unwrap_or(4)
@@ -267,4 +317,47 @@ pub fn convert_pcm_to_f32(pcm_data: &[i16]) -> Vec<f32> {
         .iter()
         .map(|&sample| sample as f32 / 32768.0)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forced_language_prefills_assistant_turn() {
+        let prompt = build_prompt(Some("Japanese"), None);
+        assert!(prompt.ends_with("<|im_start|>assistant\nlanguage Japanese<asr_text>"));
+        assert!(prompt.contains(mtmd_default_marker()));
+    }
+
+    #[test]
+    fn auto_language_leaves_assistant_turn_open() {
+        let prompt = build_prompt(None, Some("用語: Tauri"));
+        assert!(prompt.ends_with("<|im_start|>assistant\n"));
+        assert!(prompt.starts_with("<|im_start|>system\n用語: Tauri<|im_end|>"));
+    }
+
+    #[test]
+    fn transcript_header_is_stripped() {
+        assert_eq!(
+            extract_transcript("language Japanese<asr_text>こんにちは。"),
+            "こんにちは。"
+        );
+        assert_eq!(extract_transcript(" こんにちは。 "), "こんにちは。");
+    }
+
+    #[test]
+    fn language_codes_map_to_names() {
+        assert_eq!(qwen3_language_name("ja"), Some("Japanese"));
+        assert_eq!(qwen3_language_name("JA"), Some("Japanese"));
+        assert_eq!(qwen3_language_name("auto"), None);
+    }
+
+    #[test]
+    fn short_audio_is_left_padded() {
+        let padded = pad_to_min_length(&[1.0; 10]);
+        assert_eq!(padded.len(), MIN_AUDIO_SAMPLES);
+        assert_eq!(padded[MIN_AUDIO_SAMPLES - 1], 1.0);
+        assert_eq!(padded[0], 0.0);
+    }
 }

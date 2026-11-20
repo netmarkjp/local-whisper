@@ -1,6 +1,6 @@
 use crate::audio::{
-    try_recording_state, RecordingState, SILENCE_TIMEOUT_SAMPLES, VAD_CHUNK_SIZE,
-    VAD_POST_BUFFER_SAMPLES, VAD_PRE_BUFFER_SAMPLES, VAD_SAMPLE_RATE,
+    RecordingState, SESSION_MAX_SAMPLES, SILENCE_TIMEOUT_SAMPLES, VAD_CHUNK_SIZE,
+    VAD_POST_BUFFER_SAMPLES, VAD_PRE_BUFFER_SAMPLES,
 };
 use crate::transcription::api_client::stream_audio_chunk_and_emit;
 use crate::transcription::worker::queue_transcription_with_source;
@@ -66,12 +66,6 @@ fn format_system_audio_error(default_message: &str) -> String {
         .map(|detail| format!("{default_message}: {detail}"))
         .unwrap_or_else(|| default_message.to_string())
 }
-fn current_session_max_samples() -> usize {
-    try_recording_state()
-        .map(|state| state.lock().session_max_samples)
-        .unwrap_or(30 * VAD_SAMPLE_RATE as usize)
-}
-
 extern "C" fn audio_callback(samples: *const f32, count: c_int) {
     unsafe {
         let session_ptr = addr_of_mut!(SYSTEM_AUDIO_SESSION);
@@ -218,7 +212,7 @@ fn process_system_audio_sample_local(
         }
     }
 
-    if session.session_samples >= current_session_max_samples() {
+    if session.session_samples >= SESSION_MAX_SAMPLES {
         finalize_system_audio_session(session, "session_max_duration", app_handle, language);
     }
 

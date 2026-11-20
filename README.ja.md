@@ -12,18 +12,18 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
 ## なにができる？
 
 - 🔒 **完全ローカル** – ネットワークアクセス不要。機密音声も安心。
-- ⚡ **低遅延** – whisper.cpp ベースの最適化で、Apple Silicon の CPU/GPU を無駄なく活用。
+- ⚡ **低遅延** – [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) を llama.cpp で動かし、Apple Silicon の GPU（Metal）で高速に推論。
 - 🎧 **音声ソースを選べる** – マイク入力とシステム音声入力をワンタップで切り替え。
 - 🎥 **録画もできる** – Web 会議や配信をキャプチャして、そのまま文字起こしに活用。
 - 🗣️ **日本語に強い** – 長時間の会議記録や動画も安定して文字起こし。
-- 🪄 **モデルを UI から選択** – base / small / medium / large v3 turbo を切り替えて精度と速度を調整。
+- 🪄 **モデルを UI からインストール** – 文字起こしモデルをアプリ内からダウンロードし、固定したチェックサムで検証。
 
 ## 必要環境
 
 - Apple Silicon 搭載 Mac（macOS 13.3 以上推奨。UI の Tailwind CSS v4 が Safari 16.4 以上 / WKWebView を必要とするため）
 - [mise](https://mise.jdx.dev/)（`mise.toml` に固定された Rust / Node.js / pnpm をインストールします）
-- Xcode Command Line Tools（`xcode-select --install`）: Swift ブリッジ用の `swiftc` / `xcrun`、および `whisper-rs-sys` のビルドに必要な clang / libclang を含みます
-- [CMake](https://cmake.org/)（`whisper-rs-sys` 経由の whisper.cpp ビルド用。例: `brew install cmake`）
+- Xcode Command Line Tools（`xcode-select --install`）: Swift ブリッジ用の `swiftc` / `xcrun`、および `llama-cpp-sys-2` のビルドに必要な clang / libclang を含みます。Xcode 本体は不要です（llama.cpp は Metal シェーダをソースのまま埋め込み、実行時にコンパイルします）
+- [CMake](https://cmake.org/)（`llama-cpp-sys-2` 経由の llama.cpp ビルド用。例: `brew install cmake`）
 
 ## セットアップ
 
@@ -85,7 +85,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev -- --locked
 ```
 
-`--` 以降は cargo に渡され、`--locked` により `Cargo.lock` を更新せずにビルドします。初回は whisper.cpp（CMake）と依存クレートのビルドで数分〜十数分かかります。
+`--` 以降は cargo に渡され、`--locked` により `Cargo.lock` を更新せずにビルドします。初回は llama.cpp（CMake）と依存クレートのビルドで数分〜十数分かかります。
 
 ### 5. リリースビルド（任意）
 
@@ -114,17 +114,21 @@ rustup default 2>/dev/null # 手順 0 で控えた既定 toolchain から変わ�
 - **リモート API**: リモートの文字起こし API を使う設定にした場合、WebSocket は `ws://`（平文）でのみ接続できます。信頼できないネットワーク越しのサーバーには接続しないでください。
 - **依存を更新したい場合**: この手順では依存は更新されません。更新手順は下の「メンテナンス（依存の更新）」を参照してください。
 
-## モデル選択のヒント
+## モデル
 
-| モデル         | 特徴                   | 想定用途                          |
-| -------------- | ---------------------- | --------------------------------- |
-| base           | バランス型。初期設定。 | 日常的な会議や動画視聴            |
-| small          | base より高精度        | 長時間の会議メモ                  |
-| medium         | さらに高精度           | 医療/法律など誤差を減らしたい場面 |
-| large v3 turbo | 最高精度ながら高速     | 字幕生成やアーカイブ用途          |
+[Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) を、llama.cpp 公式の変換版（[ggml-org/Qwen3-ASR-1.7B-GGUF](https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF)、Q8_0）で使います。
+モデルは次の 2 ファイルの組で、合計約 2.5 GB です。
 
-モデルはアプリ内のプルダウンから即時切り替えできます。
-精度重視なら `medium / large v3 turbo`、レスポンス優先なら `base` を選ぶのがおすすめです。
+| ファイル | 役割 |
+| --- | --- |
+| `Qwen3-ASR-1.7B-Q8_0.gguf` | テキストデコーダ |
+| `mmproj-Qwen3-ASR-1.7B-Q8_0.gguf` | 音声エンコーダとプロジェクタ |
+
+アプリ内のモデル一覧からインストールしてください。
+2 ファイルはモデルディレクトリに並べて置く必要があります。
+
+Qwen3-ASR はタイムスタンプを返しません。
+話している間は数秒ごとに発話全体を文字起こしし直して途中結果を差し替え、無音を検出したとき、または発話が 30 秒に達したときに確定します。
 
 ## 使い方
 
@@ -136,7 +140,7 @@ rustup default 2>/dev/null # 手順 0 で控えた既定 toolchain から変わ�
 ## トラブルシューティング
 
 - **音声が取得できない**: macOS の「システム設定 > プライバシーとセキュリティ > マイク」でアプリの権限を許可してください。
-- **パフォーマンスが出ない**: 一時的に別モデルへ切り替え、または他の重いアプリを終了して CPU/GPU 負荷を下げてください。
+- **パフォーマンスが出ない**: GPU を使う他のアプリを終了するか、ストリーミング設定で途中結果の更新間隔を長くしてください。
 
 ## メンテナンス（依存の更新）
 
@@ -162,8 +166,8 @@ gh actions-lock --verify                                   # 読み取り専用�
 
 ## 謝辞
 
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
-- [OpenAI Whisper](https://github.com/openai/whisper)
+- [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) と [llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
 - [Tauri](https://tauri.app/)
 
 ## ライセンス

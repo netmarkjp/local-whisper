@@ -17,18 +17,18 @@ https://github.com/user-attachments/assets/f6268cb3-1534-42b4-9070-f0ae29a6dcf0
 ## Highlights
 
 - 🔒 **Fully offline** – No network access required, keeping sensitive audio on your machine.
-- ⚡ **Optimized for low latency** – Built on whisper.cpp to make the most of Apple Silicon’s CPU/GPU.
+- ⚡ **Optimized for low latency** – Runs [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) on llama.cpp with Metal acceleration on Apple Silicon.
 - 🎧 **Flexible sources** – Switch between microphone input and system audio with one tap.
 - 🎥 **Screen/audio capture ready** – Record meetings or streams and transcribe them immediately.
 - 🗣️ **Japanese-first experience** – Tuned for long-form Japanese speech, but works for other languages too.
-- 🪄 **UI-selectable models** – Choose between base / small / medium / large v3 turbo directly from the interface.
+- 🪄 **In-app model install** – Download the speech recognition model from the interface, verified against a pinned checksum.
 
 ## Requirements
 
 - Apple Silicon Mac (macOS 13.3+ recommended; the UI uses Tailwind CSS v4, which requires Safari 16.4+ / WKWebView)
 - [mise](https://mise.jdx.dev/) (installs the pinned Rust, Node.js and pnpm from `mise.toml`)
-- Xcode Command Line Tools (`xcode-select --install`): provides `swiftc` / `xcrun` for the Swift bridge, and clang / libclang for building `whisper-rs-sys`
-- [CMake](https://cmake.org/) (for building whisper.cpp via `whisper-rs-sys`, e.g. `brew install cmake`)
+- Xcode Command Line Tools (`xcode-select --install`): provides `swiftc` / `xcrun` for the Swift bridge, and clang / libclang for building `llama-cpp-sys-2`. Xcode itself is not needed: llama.cpp embeds its Metal shaders and compiles them at run time
+- [CMake](https://cmake.org/) (for building llama.cpp via `llama-cpp-sys-2`, e.g. `brew install cmake`)
 
 ## Setup
 
@@ -90,7 +90,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev -- --locked
 ```
 
-Arguments after `--` are passed to cargo; `--locked` builds without updating `Cargo.lock`. The first build compiles whisper.cpp (CMake) and all crates and takes several minutes or more.
+Arguments after `--` are passed to cargo; `--locked` builds without updating `Cargo.lock`. The first build compiles llama.cpp (CMake) and all crates and takes several minutes or more.
 
 ### 5. Release build (optional)
 
@@ -119,17 +119,18 @@ If your default toolchain changed, restore it with `rustup default <previous too
 - **Remote API**: if you configure a remote transcription API, the WebSocket can only connect via `ws://` (plaintext). Do not connect to servers across untrusted networks.
 - **Updating dependencies**: these steps never update dependencies. See "Maintenance (updating dependencies)" below.
 
-## Model selection tips
+## Model
 
-| Model          | Characteristics                   | Suggested use case                                              |
-| -------------- | --------------------------------- | --------------------------------------------------------------- |
-| base           | Balanced default                  | Everyday meetings, casual videos                                |
-| small          | Higher accuracy than base         | Long meeting notes                                              |
-| medium         | Even higher accuracy              | Fields that require fewer transcription errors (legal, medical) |
-| large v3 turbo | Highest accuracy while still fast | Subtitle generation, archival transcripts                       |
+The app uses [Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) in the official llama.cpp conversion ([ggml-org/Qwen3-ASR-1.7B-GGUF](https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF), Q8_0). A model is a pair of files, about 2.5 GB in total:
 
-Switch models from the in-app dropdown at any time.
-Pick `medium` or `large v3 turbo` when accuracy matters most; choose `base` for faster turnaround.
+| File | Role |
+| --- | --- |
+| `Qwen3-ASR-1.7B-Q8_0.gguf` | Text decoder |
+| `mmproj-Qwen3-ASR-1.7B-Q8_0.gguf` | Audio encoder and projector |
+
+Install it from the in-app model list. Both files must sit side by side in the model directory.
+
+Qwen3-ASR does not return timestamps. While you speak, the app re-transcribes the current utterance every few seconds and replaces the pending text; the text is finalized when a pause is detected or the utterance reaches 30 seconds.
 
 ## How to use
 
@@ -141,7 +142,7 @@ Pick `medium` or `large v3 turbo` when accuracy matters most; choose `base` for 
 ## Troubleshooting
 
 - **No audio detected**: Check macOS “System Settings → Privacy & Security → Microphone” and allow access for the app.
-- **Slow performance**: Temporarily switch to a lighter model or close other CPU/GPU-intensive applications.
+- **Slow performance**: Close other GPU-intensive applications, or lengthen the partial transcript interval in the streaming settings.
 
 ## Maintenance (updating dependencies)
 
@@ -167,8 +168,8 @@ Updating `mise.lock` (after editing `mise.toml`): run `mise lock`, and check it 
 
 ## Credits
 
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp)
-- [OpenAI Whisper](https://github.com/openai/whisper)
+- [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) and [llama-cpp-rs](https://github.com/utilityai/llama-cpp-rs)
 - [Tauri](https://tauri.app/)
 
 ## License

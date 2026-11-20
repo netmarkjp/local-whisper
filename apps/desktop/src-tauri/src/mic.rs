@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use voice_activity_detector::VoiceActivityDetector;
 
-use crate::audio::constants::{VAD_CHUNK_SIZE, VAD_SAMPLE_RATE};
+use crate::audio::constants::{SESSION_MAX_SAMPLES, VAD_CHUNK_SIZE, VAD_SAMPLE_RATE};
 use crate::audio::processing::finalize_active_session;
 use crate::audio::state::{recording_state, SileroVadState};
 use crate::audio::utils::resample_audio;
@@ -179,7 +179,7 @@ pub async fn start_mic_stream(app_handle: AppHandle, language: Option<String>) -
                             }
                         }
 
-                        if state.session_samples >= state.session_max_samples {
+                        if state.session_samples >= SESSION_MAX_SAMPLES {
                             finalize_active_session(&mut state, "session_max_duration");
                         }
                         let mut count = callback_count.lock();
