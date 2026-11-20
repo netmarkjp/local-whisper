@@ -103,11 +103,17 @@ fn ensure_onnxruntime_runtime() -> Result<()> {
             .unwrap_or_else(|_| dylib_path.to_path_buf());
 
         if env::var_os("ORT_DYLIB_PATH").is_none() {
-            env::set_var("ORT_DYLIB_PATH", &abs_path);
+            // SAFETY: NOT guaranteed. This runs from SileroVadModel::new after other threads (Tauri/tokio/cpal)
+            // may already exist; a concurrent getenv elsewhere would be a data race. The Once guard only
+            // prevents repeated writes. Prefer setting these before threads spawn or configuring ORT directly.
+            unsafe { env::set_var("ORT_DYLIB_PATH", &abs_path); }
         }
 
         if env::var_os("ORT_DSO_PATH").is_none() {
-            env::set_var("ORT_DSO_PATH", &abs_path);
+            // SAFETY: NOT guaranteed. This runs from SileroVadModel::new after other threads (Tauri/tokio/cpal)
+            // may already exist; a concurrent getenv elsewhere would be a data race. The Once guard only
+            // prevents repeated writes. Prefer setting these before threads spawn or configuring ORT directly.
+            unsafe { env::set_var("ORT_DSO_PATH", &abs_path); }
         }
 
         if let Some(lib_dir) = abs_path.parent() {
@@ -120,7 +126,10 @@ fn ensure_onnxruntime_runtime() -> Result<()> {
                 }
                 _ => lib_dir.display().to_string(),
             };
-            env::set_var("DYLD_LIBRARY_PATH", new_dyld);
+            // SAFETY: NOT guaranteed. This runs from SileroVadModel::new after other threads (Tauri/tokio/cpal)
+            // may already exist; a concurrent getenv elsewhere would be a data race. The Once guard only
+            // prevents repeated writes. Prefer setting these before threads spawn or configuring ORT directly.
+            unsafe { env::set_var("DYLD_LIBRARY_PATH", new_dyld); }
         } else {
             init_result = Err(anyhow::anyhow!(
                 "Failed to determine libonnxruntime directory for {}",
@@ -130,7 +139,10 @@ fn ensure_onnxruntime_runtime() -> Result<()> {
         }
 
         if env::var_os("ORT_STRATEGY").is_none() {
-            env::set_var("ORT_STRATEGY", "system");
+            // SAFETY: NOT guaranteed. This runs from SileroVadModel::new after other threads (Tauri/tokio/cpal)
+            // may already exist; a concurrent getenv elsewhere would be a data race. The Once guard only
+            // prevents repeated writes. Prefer setting these before threads spawn or configuring ORT directly.
+            unsafe { env::set_var("ORT_STRATEGY", "system"); }
         }
     });
 

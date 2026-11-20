@@ -3,7 +3,8 @@ name = "local-whisper"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,28 +13,32 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "local_whisper_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop (macOS) only: the binary links this crate as an rlib. The Tauri template also builds
+# "staticlib" (iOS) and "cdylib" (Android), which are unused here and add ~1.4 GB per debug build.
+# Add them back if mobile targets are introduced.
+crate-type = ["rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7", features = [] }
 env_logger = "0.11.8"
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
+tauri = { version = "2.12", features = [] }
+tauri-plugin-opener = "2.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-asr-core = { path = "../../../crates/asr-core" }
-tokio = { version = "1", features = ["full"] }
-once_cell = "1.19"
-cpal = "0.15"
-parking_lot = "0.12"
+asr-core.workspace = true
+tokio = { version = "1.54", features = ["full"] }
+once_cell = "1.21"
+cpal = "0.18"
+parking_lot = "0.13"
 chrono = "0.4"
-reqwest = { version = "0.11", features = ["stream", "json", "blocking"] }
+reqwest = { version = "0.13", features = ["stream", "json", "blocking"] }
 voice_activity_detector = "0.2.1"
 hound = "3.5"
 log = "0.4"
 env_logger = "0.11.8"
 dotenvy = "0.15"
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
+sha2 = "0.11"

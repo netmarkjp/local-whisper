@@ -1,12 +1,12 @@
 [package]
 name = "asr-core"
 version = "0.1.0"
-edition = "2021"
-build = "build.rs"
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
-whisper-rs = { version = "0.12", features = ["metal"] }
-thiserror = "1.0"
+whisper-rs = { version = "0.16", features = ["metal"] }
+thiserror = "2"
 hound = "3.5"
-anyhow = "1.0"
+anyhow = "1"
 voice_activity_detector = "0.2.1"

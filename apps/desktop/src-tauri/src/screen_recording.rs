@@ -3,7 +3,7 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::os::raw::c_int;
 
-extern "C" {
+unsafe extern "C" {
     fn screen_recording_start(output_path: *const c_char) -> c_int;
     fn screen_recording_stop() -> c_int;
 }

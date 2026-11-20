@@ -13,7 +13,7 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 use tauri::AppHandle;
 use voice_activity_detector::VoiceActivityDetector;
-extern "C" {
+unsafe extern "C" {
     fn system_audio_start(callback: extern "C" fn(*const f32, c_int)) -> c_int;
     fn system_audio_stop() -> c_int;
     fn system_audio_last_error() -> *const c_char;
