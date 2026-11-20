@@ -13,7 +13,10 @@ rust-version.workspace = true
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "local_whisper_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop (macOS) only: the binary links this crate as an rlib. The Tauri template also builds
+# "staticlib" (iOS) and "cdylib" (Android), which are unused here and add ~1.4 GB per debug build.
+# Add them back if mobile targets are introduced.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
